@@ -1,0 +1,9 @@
+<?xml version="1.0" ?>
+<launch>
+
+  <node name="osm_localizer" pkg="osm_localization" type="osm_localization" output="screen">
+    <param name="velodyne_topic" value="/velodyne_points"/>
+  </node>
+
+
+</launch>
