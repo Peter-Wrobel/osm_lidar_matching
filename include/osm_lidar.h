@@ -43,7 +43,8 @@
 #include <pcl/filters/normal_space.h>
 
 #include <deque>
-
+#include <stack>
+#include <tuple>
 //reconfigure
 #include <dynamic_reconfigure/server.h>
 #include <osm_localization/osm_localizationConfig.h>
@@ -79,6 +80,8 @@ namespace osm_localizer{
         void getVelodyneCB(const sensor_msgs::PointCloud2ConstPtr & msg);
         bool getGroundPlane(void);
         void makeEdges(const ros::TimerEvent&);
+        void filterNonGround(const ros::TimerEvent&);
+        void makeRings(void);
 
 
         /*helpers*/
@@ -96,6 +99,7 @@ namespace osm_localizer{
         std::string     pc_topic_;
 
         ros::Publisher  filtered_pc_pub_;
+        ros::Publisher  ring_pub_;
 
 
         dynamic_reconfigure::Server<osm_localization::osm_localizationConfig> server_;
@@ -104,9 +108,12 @@ namespace osm_localizer{
         static period_t PERIOD;
         static dist_t   CENTROID_DIST;
         static dist_t   SEARCH_RADIUS;
+        static uint     RING_ID;
 
         ros::Timer      edge_timer_;
-        std::deque<pcl::PointCloud<pcl::PointXYZ>::Ptr> cloud_deck_;
+        ros::Timer      road_timer_;
+        std::deque <pcl::PointCloud<pcl::PointXYZ>::Ptr>  cloud_deck_;
+        std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr>  rings_;
 
         pcl::PointCloud<pcl::PointXYZ>::Ptr  filtered_cloud_;
         pcl::PointCloud<pcl::PointXYZ>::Ptr  edge_cloud_;

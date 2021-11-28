@@ -6,7 +6,8 @@ namespace osm_localizer{
         float    OSMLidar::NORM_THRESHOLD  = 0.95; //== cosine(theta)
         period_t OSMLidar::PERIOD          = 4;
         dist_t   OSMLidar::CENTROID_DIST   = 1;
-        dist_t   OSMLidar::SEARCH_RADIUS   = 0.2;
+        dist_t   OSMLidar::SEARCH_RADIUS   = 0.3;
+        uint     OSMLidar::RING_ID         = 0;
 
 
     OSMLidar::OSMLidar(ros::NodeHandle & n):
@@ -20,9 +21,10 @@ namespace osm_localizer{
         }
         // 0. subscribers, timers publishers
         pc_sub_          = n.subscribe(pc_topic_, 5, &OSMLidar::getVelodyneCB, this);
-        edge_timer_      = n.createTimer(ros::Duration(PERIOD), &OSMLidar::makeEdges, this);
-
+        //edge_timer_      = n.createTimer(ros::Duration(PERIOD), &OSMLidar::makeEdges, this);
+        road_timer_      = n.createTimer(ros::Duration(0.5), &OSMLidar::filterNonGround, this);
         filtered_pc_pub_ = n.advertise<sensor_msgs::PointCloud2>("chatter", 3);
+        ring_pub_        = n.advertise<sensor_msgs::PointCloud2>("rings", 3);
 
         // 1. dynamic reconfigure
         server_.setCallback(boost::bind(&OSMLidar::reconfigCB, this, _1, _2));
@@ -36,9 +38,131 @@ namespace osm_localizer{
         DECK_SIZE       = config.deck_size;
         NORM_THRESHOLD  = config.norm_threshold; 
         PERIOD          = config.period;
-        CENTROID_DIST   = config.centroid_dist;        
+        CENTROID_DIST   = config.centroid_dist;   
+        SEARCH_RADIUS   = config.search_radius;     
+        RING_ID         = config.ring_id;
     }
 
+
+    void OSMLidar::filterNonGround(const ros::TimerEvent&){
+
+        //0. filter floud
+        if(!getGroundPlane()) return; 
+
+        
+        //1. Isolate rings  
+
+        makeRings();
+
+        sensor_msgs::PointCloud2 msg;
+        pcl::toROSMsg(*rings_[RING_ID], msg);
+        msg.header.frame_id = "velodyne";
+
+        ring_pub_.publish(msg);
+
+        edge_cloud_->clear();
+        filtered_cloud_->clear();
+    }
+
+    void OSMLidar::makeRings(void){
+
+        //0. create search tree
+        pcl::KdTreeFLANN<pcl::PointXYZ> kdtree;
+        kdtree.setInputCloud (filtered_cloud_);
+        std::cout << "1. filtered cloud size " << filtered_cloud_->size() << std::endl;
+        float radius = SEARCH_RADIUS;
+
+        std::size_t N = filtered_cloud_->size();
+
+        //1. clustering structures
+        std::vector<bool>                       visited(filtered_cloud_->size(), false);
+        std::size_t                             visited_count  = 0;
+        std::size_t                             next_unvisited = 0;
+        std::stack<std::size_t>                 frontier;
+        std::vector<std::vector<std::size_t>>   clusteres;
+        std::size_t                             cluster_id  = 0;
+
+        // 1(a). Initialize frontier, cluster
+        frontier.push(0);
+        clusteres.push_back(std::vector<std::size_t>());
+
+        //2. Go through every point, 
+        while(visited_count < N){
+            
+            //2(a). We see if we need to start new cluster
+            if(frontier.empty()){
+
+                //2(a.i). Find next unvisited
+                while(visited[next_unvisited]){
+                    next_unvisited++;
+                    if(next_unvisited >=N){
+                        ROS_ERROR("[OSM Localization] next unvisited bugged up");
+                        exit(1);
+                    }
+                }
+
+                //2(a.ii) Start new cluster
+                cluster_id++;
+                clusteres.push_back(std::vector<std::size_t>());
+
+
+                //2(a.iii) Push next unvisited
+                frontier.push(next_unvisited);
+            }
+
+            //2(b) get next point to find neighors around.
+            std::size_t i = frontier.top();
+            frontier.pop();
+            pcl::PointXYZ searchPoint = (*filtered_cloud_)[i];
+
+            //2(c) Update state & cluster
+            if(visited[i]) continue;
+            visited[i] = true;
+            visited_count++;
+            clusteres[cluster_id].push_back(i);
+        
+            //2(d). Push points that fall within radius to cluster, some to frontier
+            std::vector<int>   pointIdxRadiusSearch;
+            std::vector<float> pointRadiusSquaredDistance;
+            if (kdtree.radiusSearch (searchPoint, radius, pointIdxRadiusSearch, pointRadiusSquaredDistance) > 0){
+                for(std::size_t j = 0; j < pointIdxRadiusSearch.size(); ++j){
+
+                    std::size_t k = pointIdxRadiusSearch[j];
+                    //2(d.i) if visited, continue
+                    if(visited[k]) continue;
+
+                    // 2(d.ii) to frontier
+                    if(pointRadiusSquaredDistance[j]>radius/3){
+                        frontier.push(k);
+                    }
+
+                    // 2(d.iii) directly to cluster
+                    else{
+                        visited_count++;
+                        visited[k]= true;
+                        clusteres[cluster_id].push_back(k);
+                    }
+                }
+            }
+   
+        }
+
+        //3 create rings
+        rings_.clear();
+
+        int clust = 0;
+        for(const std::vector<std::size_t> & cluster : clusteres){
+
+            rings_.push_back( pcl::PointCloud<pcl::PointXYZ>::Ptr
+                                (new pcl::PointCloud<pcl::PointXYZ>));
+            for( std::size_t i : cluster){
+                rings_[clust]->push_back((*filtered_cloud_)[i]);
+            }
+            rings_[clust]->is_dense = true;
+            clust++;
+        }
+
+    }
 
     bool OSMLidar::getGroundPlane(void){
 
@@ -174,7 +298,6 @@ namespace osm_localizer{
 
     void OSMLidar::getVelodyneCB(const sensor_msgs::PointCloud2ConstPtr& msg){
 
-        //pcl::PointCloud<pcl::PointXYZI>::Ptr debug_path_points_;
         pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
 
         pcl::fromROSMsg(*msg, *cloud);
