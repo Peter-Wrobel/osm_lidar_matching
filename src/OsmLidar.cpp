@@ -134,6 +134,7 @@ namespace osm_localizer{
 
         float radius = SEARCH_RADIUS;
 
+        ROS_INFO("[OSM localization]: size of edge_cloud before process is [%d]", (int)filtered_cloud_->size());
 
         //2. Go through every point, find if centroid is off kilter. If that is the case, keep
         for(pcl::PointCloud<pcl::PointXYZ>::iterator pc_pt_itr  = filtered_cloud_->begin(); 
@@ -163,6 +164,7 @@ namespace osm_localizer{
         filtered_pc_pub_.publish(msg);
 
         edge_cloud_->clear();
+        filtered_cloud_->clear();
 
 
     }
