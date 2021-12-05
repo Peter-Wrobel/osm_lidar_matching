@@ -7,7 +7,7 @@ namespace osm_localizer{
         period_t OSMLidar::PERIOD          = 4;
         dist_t   OSMLidar::CENTROID_DIST   = 1;
         dist_t   OSMLidar::SEARCH_RADIUS   = 0.3;
-        uint     OSMLidar::RING_ID         = 0;
+        int      OSMLidar::RING_ID          = 0;
 
 
     OSMLidar::OSMLidar(ros::NodeHandle & n):
@@ -41,6 +41,7 @@ namespace osm_localizer{
         CENTROID_DIST   = config.centroid_dist;   
         SEARCH_RADIUS   = config.search_radius;     
         RING_ID         = config.ring_id;
+        
     }
 
 
@@ -51,20 +52,117 @@ namespace osm_localizer{
 
         
         //1. Isolate rings  
-
         makeRings();
 
-        sensor_msgs::PointCloud2 msg;
-        pcl::toROSMsg(*rings_[RING_ID], msg);
-        msg.header.frame_id = "velodyne";
+        for(const auto & paar : ring_map_){
 
-        ring_pub_.publish(msg);
+            std::cout << paar.first << ", ";
+        }
+        std::cout << std:: endl;
+
+        //2. Get edge points
+        /*
+        analyzeRings();
+        */
+
+        sensor_msgs::PointCloud2 msg;
+        if(ring_fanc_map_.find(RING_ID) !=ring_fanc_map_.end()){
+            
+            pcl::toROSMsg(*ring_fanc_map_[RING_ID], msg);
+            msg.header.frame_id = "velodyne";
+
+            ring_pub_.publish(msg);
+        }
+        
 
         edge_cloud_->clear();
         filtered_cloud_->clear();
+        ring_map_.clear();
+        ring_fanc_map_.clear();
     }
 
+    bool ringComp(const std::pair<pcl::PointXYZ, std::size_t> & a, 
+                  const std::pair<pcl::PointXYZ, std::size_t> & b){
+
+        return std::atan2(a.first.y, a.first.x) < std::atan2(b.first.y, b.first.x);
+    }
+
+    void printVec(std::vector<float> & vec){
+
+        std::cout << "[";
+        for(float i : vec){
+
+            std::cout << i  << " ";
+        }
+
+        std::cout << "]\n";
+    }
+
+
+
+
+
     void OSMLidar::makeRings(void){
+
+        //0. Iterate through map and check thetas
+        std::size_t N = filtered_cloud_->size();
+        std::map <int, std::vector<pcl::PointXYZ>> ring_map;
+        std::map <int, pcl::PointCloud<pcl::PointXYZ>::Ptr> ring_fanc_map;
+
+
+        for(std::size_t i = 0; i < N; ++i){
+
+            pcl::PointXYZ p     = (*filtered_cloud_)[i];
+            int           theta = (int)(180*atan2(p.z, sqrt(p.x*p.x + p.y*p.y))/M_PI);
+
+            if(ring_fanc_map.find(theta) ==ring_fanc_map.end()){
+                ring_fanc_map[theta] = 
+                        pcl::PointCloud<pcl::PointXYZ>::Ptr(new pcl::PointCloud<pcl::PointXYZ>);
+            }
+            ring_map[theta].push_back(p);
+            ring_fanc_map[theta]->push_back(p);            
+        }
+
+        //1. clump thetas together
+
+        uint ring_number = 0;
+        ring_vector_.push_back
+            (pcl::PointCloud<pcl::PointXYZ>::Ptr(new pcl::PointCloud<pcl::PointXYZ>));
+
+
+        std::map<int, std::vector<pcl::PointXYZ>>::iterator i1 = ring_map.begin();
+        std::map<int, std::vector<pcl::PointXYZ>>::iterator i2 = i1;
+
+        while(i2!=ring_map_.end()){
+
+            if(std::abs(i2->first- i1->first) >= 3){
+                ring_number++;
+                ring_vector_.push_back
+                    (pcl::PointCloud<pcl::PointXYZ>::Ptr(new pcl::PointCloud<pcl::PointXYZ>));                
+            }
+
+            for(pcl::PointXYZ p : i2->second){
+                ring_vector_[ring_number]->push_back(p);
+                    
+            }
+
+            i1 = i2;
+
+            i2++;
+
+            
+
+
+        }
+
+    }
+
+    /*void OSMLidar::makeRings(void){
+
+        // CLASS STRUCTURES USED IN THIS ALGORITHM 
+        std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr>  rings_;
+        std::vector<std::vector<std::pair<pcl::PointXYZ, std::size_t>>> rings_vec_;
+        // END CLASS STRUCTURES USED IN THIS ALGORITHM
 
         //0. create search tree
         pcl::KdTreeFLANN<pcl::PointXYZ> kdtree;
@@ -155,14 +253,44 @@ namespace osm_localizer{
 
             rings_.push_back( pcl::PointCloud<pcl::PointXYZ>::Ptr
                                 (new pcl::PointCloud<pcl::PointXYZ>));
+            rings_vec_.push_back(std::vector<std::pair<pcl::PointXYZ, std::size_t>>());
+
             for( std::size_t i : cluster){
                 rings_[clust]->push_back((*filtered_cloud_)[i]);
+                rings_vec_[clust].push_back({(*filtered_cloud_)[i], i});
             }
             rings_[clust]->is_dense = true;
             clust++;
         }
-
     }
+    
+    void OSMLidar::analyzeRings(void){
+
+        // 0. Ring by ring, sort by angle, and then calc distance derivatives
+        for(std::vector<std::pair<pcl::PointXYZ, std::size_t>> & ring : rings_vec_){
+
+            if(ring.size() == 0 ) continue;
+
+            //1. sort by angle
+            std::sort(ring.begin(), ring.end(), ringComp);
+
+            std::vector<float> derivatives(ring.size(), 0);
+
+
+            //2. Calculate derivatives
+            for(int i = 0; i < ring.size()-1; ++i){
+                derivatives[i] = pcl::euclideanDistance(ring[i].first, pcl::PointXYZ(0,0,0))-
+                                pcl::euclideanDistance(ring[i+1].first, pcl::PointXYZ(0,0,0));
+
+            }
+
+
+            //printVec(derivatives);
+
+
+            
+        }
+    }*/
 
     bool OSMLidar::getGroundPlane(void){
 
@@ -307,10 +435,9 @@ namespace osm_localizer{
 
         std::cout << "pp2 size " << pp2.data.size() << std::endl;
 
-        std::cout << msg->header.frame_id << std::endl;
 
         cloud_deck_.push_front(cloud);
-        if(cloud_deck_.size()>= DECK_SIZE) cloud_deck_.pop_back();
+        if(cloud_deck_.size()>  DECK_SIZE) cloud_deck_.pop_back();
 
     }
 

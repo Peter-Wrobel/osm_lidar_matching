@@ -41,10 +41,12 @@
 #include <pcl_conversions/pcl_conversions.h>
 #include <pcl/features/normal_3d.h>
 #include <pcl/filters/normal_space.h>
+#include <velodyne_pointcloud/pointcloudXYZIRT.h>
 
 #include <deque>
 #include <stack>
 #include <tuple>
+#include <cmath>
 //reconfigure
 #include <dynamic_reconfigure/server.h>
 #include <osm_localization/osm_localizationConfig.h>
@@ -82,6 +84,7 @@ namespace osm_localizer{
         void makeEdges(const ros::TimerEvent&);
         void filterNonGround(const ros::TimerEvent&);
         void makeRings(void);
+        void analyzeRings(void);
 
 
         /*helpers*/
@@ -108,16 +111,19 @@ namespace osm_localizer{
         static period_t PERIOD;
         static dist_t   CENTROID_DIST;
         static dist_t   SEARCH_RADIUS;
-        static uint     RING_ID;
+        static int     RING_ID;
 
         ros::Timer      edge_timer_;
         ros::Timer      road_timer_;
         std::deque <pcl::PointCloud<pcl::PointXYZ>::Ptr>  cloud_deck_;
-        std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr>  rings_;
+
+        std::map <int, std::vector<pcl::PointXYZ>> ring_map_;
+        std::map <int, pcl::PointCloud<pcl::PointXYZ>::Ptr> ring_fanc_map_;
+
 
         pcl::PointCloud<pcl::PointXYZ>::Ptr  filtered_cloud_;
         pcl::PointCloud<pcl::PointXYZ>::Ptr  edge_cloud_;
-
+        
 
     };
 
